@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+STEP_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUT="$STEP_DIR/output"
+mkdir -p "$OUT"
+echo "=== step1: PyTorch Train (float) ==="
+python3 "$STEP_DIR/train.py" "$OUT"
+python3 "$STEP_DIR/summarize.py" "$OUT"
+echo "=== step1 DONE ==="

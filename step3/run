@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+STEP_DIR="$(cd "$(dirname "$0")" && pwd)"
+STEP1_OUT="$STEP_DIR/../step1/output"
+OUT="$STEP_DIR/output"
+mkdir -p "$OUT"
+
+# Precision: 8 (default) or 16. Pass as first argument, or set PRECISION env var.
+#   ./run          -> 8-bit (Q3.4)
+#   ./run 16       -> 16-bit (Q7.8)
+#   PRECISION=16 ./run
+PRECISION="${1:-${PRECISION:-8}}"
+
+echo "=== step3: NumPy Fixed-Point Forward Pass (${PRECISION}-bit) ==="
+python3 "$STEP_DIR/forward_fixed.py" "$STEP1_OUT" "$OUT" "$PRECISION"
+python3 "$STEP_DIR/summarize.py" "$OUT"
+echo "=== step3 DONE ==="

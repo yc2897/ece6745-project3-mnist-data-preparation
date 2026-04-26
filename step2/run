@@ -1,0 +1,10 @@
+#!/bin/bash
+set -e
+STEP_DIR="$(cd "$(dirname "$0")" && pwd)"
+STEP1_OUT="$STEP_DIR/../step1/output"
+OUT="$STEP_DIR/output"
+mkdir -p "$OUT"
+echo "=== step2: NumPy Float Reproduction ==="
+python3 "$STEP_DIR/forward.py" "$STEP1_OUT" "$OUT"
+python3 "$STEP_DIR/summarize.py" "$OUT"
+echo "=== step2 DONE ==="

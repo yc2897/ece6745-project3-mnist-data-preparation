@@ -1,0 +1,6 @@
+
+# build*/
+step1/output*
+step2/output*
+step3/output*
+data/

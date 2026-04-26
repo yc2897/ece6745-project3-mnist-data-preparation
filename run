@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Usage:
+#   ./run          -> 8-bit (Q3.4) fixed-point at step3 (default)
+#   ./run 16       -> 16-bit (Q7.8)
+#   PRECISION=16 ./run
+
+./step1/run
+./step2/run
+./step3/run "${1:-${PRECISION:-8}}"
