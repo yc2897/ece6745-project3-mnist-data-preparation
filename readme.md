@@ -65,23 +65,38 @@ magnitudes; step 3 also asserts this in the vectorized full-10k pass.
 Reference numbers from a clean `./run` (seed = 42, 6 epochs, Adam(0.001),
 batch 128):
 
-| Metric | Float32 | **8-bit Q3.4** | **16-bit Q7.8** |
+| Metric | Float32 (ref) | **8-bit Q3.4** | **16-bit Q7.8** |
 |---|---|---|---|
-| Full-10k accuracy        | 97.69% | **97.39%** | **97.72%** |
-| Matches float on 10k     | —      | 9899/10000 (101 flips) | 9995/10000 (5 flips) |
-| 30-sample export acc     | 96.67% | 96.67%     | 96.67% |
-| 30-sample matches float  | —      | 30/30      | 30/30 |
+| Full-10k accuracy        | 97.69% | **97.39%** (Δ −0.30%) | **97.72%** (Δ +0.03%) |
+| Matches float on 10k     | —      | 9899/10000 — **101 flips** | 9995/10000 — **5 flips** |
+| 30-sample export acc     | 96.67% | 96.67%   | 96.67% |
+| 30-sample matches float  | —      | 30/30    | 30/30 |
+
+### 8-bit vs 16-bit, head-to-head
+
+| | **8-bit Q3.4** | **16-bit Q7.8** | **16 − 8** |
+|---|---|---|---|
+| Full-10k accuracy        | 97.39% | 97.72% | **+0.33% (33 fewer errors / 10k)** |
+| Quant-induced flips on 10k | 101  | 5      | 96 fewer flips |
+| Pixel/weight resolution  | 1/16 ≈ 0.0625 | 1/256 ≈ 0.0039 | 16× finer |
+| Storage per weight       | 8 bits | 16 bits | 2× larger |
+| Storage per layer-1 weights (784·128) | ~98 KiB | ~196 KiB | 2× |
 
 **Reading this:**
-- 16-bit Q7.8 is essentially lossless — only 5 of 10,000 predictions flip
-  versus float, and the small accuracy bump (97.69→97.72%) is just chance
-  among those 5 flips.
-- 8-bit Q3.4 costs about **0.3%** accuracy: ~101 of 10,000 decisions flip.
-  That's the price of dropping pixel/weight resolution from ~256 levels to
-  ~16 levels.
+- **16-bit Q7.8 is essentially lossless.** Only 5 of 10,000 predictions
+  flip versus float, and the tiny accuracy bump (97.69 → 97.72%) is just
+  chance among those 5 flips — some happened to flip wrong→right.
+- **8-bit Q3.4 costs about 0.3% accuracy** (97.69 → 97.39%): ~101 of
+  10,000 decisions flip. That's the price of dropping pixel/weight
+  resolution from ~256 levels to ~16 levels.
+- **16-bit beats 8-bit by ~0.33% on MNIST** for 2× the weight storage and
+  somewhat wider MAC units. Whether that's worth it is a hardware-area
+  trade-off; for an inference-only accelerator with plenty of SRAM, 16-bit
+  is the easy choice. For an area-constrained design, 8-bit is still
+  inside one percent of float.
 - The 30-sample exported subset is too small (resolution 1/30 ≈ 3.3%) to
   expose the 0.3% gap — both precisions match all 30 float decisions. To
-  see the real difference, look at the full-10k numbers.
+  see the real difference, look at the full-10k numbers above.
 
 ## Reproduce result
 
