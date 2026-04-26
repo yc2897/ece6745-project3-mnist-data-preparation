@@ -51,6 +51,20 @@ emit(f" {'num_test_vectors':<{W}} = {num_tests}")
 emit(f" {'fixed_point_accuracy':<{W}} = {num_correct}/{num_tests} ({100*acc:.1f}%)")
 if matches_float is not None:
     emit(f" {'matches_float':<{W}} = {matches_float}/{num_tests} ({100*match_rate:.1f}%)")
+# Full-10k metrics, if step3 emitted them
+full_n  = tv.get("full_num_tests")
+full_ff = tv.get("full_float_accuracy")
+full_fp = tv.get("full_fixed_accuracy")
+full_m  = tv.get("full_matches_float")
+full_mr = tv.get("full_match_rate")
+if full_n is not None:
+    emit(f" {'full_test_set':<{W}} = {full_n}")
+    if full_ff is not None:
+        emit(f" {'full_float_accuracy':<{W}} = {100*full_ff:.2f}%")
+    if full_fp is not None:
+        emit(f" {'full_fixed_accuracy':<{W}} = {100*full_fp:.2f}%")
+    if full_m is not None and full_mr is not None:
+        emit(f" {'full_matches_float':<{W}} = {full_m}/{full_n} ({100*full_mr:.2f}%)")
 emit(f" {'outputs':<{W}} = weights_fixed.json, test_vectors.json")
 emit("")
 # step3 PASS = quantization preserved every float decision (label accuracy

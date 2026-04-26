@@ -2,6 +2,8 @@ import numpy as np
 import json
 import os
 import sys
+import torch
+from torchvision import datasets, transforms
 
 # --------------------------------------------------------------------------
 # Input/output directories + precision (passed as arguments)
@@ -177,10 +179,84 @@ match_rate = matches_float / len(X_test)
 print(f"\nLabel accuracy:        {correct}/{len(X_test)} = {acc:.4f}")
 print(f"Matches float (step1): {matches_float}/{len(X_test)} = {match_rate:.4f}")
 if matches_float == len(X_test):
-    print("PASS: Fixed-point preserves every float decision (no quantization-induced flips).")
+    print("PASS: Fixed-point preserves every float decision on exported subset.")
 else:
     flips = len(X_test) - matches_float
-    print(f"FAIL: {flips} prediction(s) changed due to quantization.")
+    print(f"FAIL: {flips} prediction(s) changed due to quantization on exported subset.")
+
+# --------------------------------------------------------------------------
+# Full-10k fixed-point evaluation (vectorized)
+# --------------------------------------------------------------------------
+# The 30-sample export is the golden vector for the hardware testbench, but
+# it's far too small to resolve the actual 8-bit vs 16-bit accuracy gap. So
+# here we also run fixed-point inference on the *full* MNIST test set
+# (10,000 samples) — same model, same precision — and report:
+#   - float (numpy) accuracy on full set       (sanity vs step1)
+#   - fixed-point accuracy on full set
+#   - fixed-point match rate vs float on full set
+# Vectorized with int64 accumulators (matmul of two int8/int16 arrays could
+# overflow int32 in the absolute worst case; trained weights are far below
+# that, but int64 is free to use here and removes any doubt).
+
+print(f"\nFull-10k fixed-point evaluation ({Q_LABEL})")
+print("=" * 50)
+
+# Reload the full normalized test set the same way step1 did.
+data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
+MNIST_MEAN = 0.1307
+MNIST_STD  = 0.3081
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((MNIST_MEAN,), (MNIST_STD,)),
+    transforms.Lambda(lambda x: x.view(-1)),
+])
+test_set_full = datasets.MNIST(data_root, train=False, download=True, transform=transform)
+X_full_f = torch.stack([test_set_full[i][0] for i in range(len(test_set_full))]).numpy()  # (10000, 784)
+y_full   = np.array([test_set_full[i][1] for i in range(len(test_set_full))], dtype=np.int64)
+N_full   = len(y_full)
+
+# Float reference (NumPy) on full set — should match step1's PyTorch number.
+def forward_float_batch(X):
+    h = np.maximum(X @ W1_f.T + b1_f, 0)
+    return h @ W2_f.T + b2_f
+
+logits_float_full = forward_float_batch(X_full_f)
+preds_float_full  = logits_float_full.argmax(axis=1)
+acc_float_full    = (preds_float_full == y_full).mean()
+print(f"Float (numpy)        full-10k accuracy: {(preds_float_full == y_full).sum()}/{N_full} = {acc_float_full:.4f}")
+
+# Fixed-point on full set
+X_full_q = float_to_fixed(X_full_f)  # (10000, 784) STORE_DTYPE
+
+W1_64 = W1.astype(np.int64)
+b1_64 = b1.astype(np.int64)
+W2_64 = W2.astype(np.int64)
+b2_64 = b2.astype(np.int64)
+X64   = X_full_q.astype(np.int64)
+
+# Layer 1
+acc1 = X64 @ W1_64.T                 # (10000, HIDDEN), int64
+acc1 = acc1 >> FRAC_BITS             # arithmetic shift
+acc1 = acc1 + b1_64                  # broadcast (HIDDEN,)
+h_q  = np.maximum(acc1, 0)           # ReLU
+# Layer 2
+acc2 = h_q @ W2_64.T                 # (10000, OUTPUT), int64
+acc2 = acc2 >> FRAC_BITS
+logits_fp_full = acc2 + b2_64        # (10000, OUTPUT)
+
+# Hardware accumulator is int32 — sanity-check we never exceed it.
+worst_acc = int(np.max(np.abs(np.concatenate([acc1.ravel(), acc2.ravel()]))))
+if worst_acc > 2**31 - 1:
+    print(f"  WARNING: worst-case accumulator value {worst_acc} exceeds int32 range")
+
+preds_fp_full = logits_fp_full.argmax(axis=1)
+correct_fp_full       = int((preds_fp_full == y_full).sum())
+matches_float_full    = int((preds_fp_full == preds_float_full).sum())
+acc_fp_full           = correct_fp_full / N_full
+match_rate_full       = matches_float_full / N_full
+print(f"Fixed-point ({Q_LABEL}) full-10k accuracy: {correct_fp_full}/{N_full} = {acc_fp_full:.4f}")
+print(f"Fixed-point ({Q_LABEL}) matches-float on full-10k: {matches_float_full}/{N_full} = {match_rate_full:.4f}")
+print(f"Quantization-induced flips on full-10k: {N_full - matches_float_full}")
 
 # --------------------------------------------------------------------------
 # Export fixed-point weights + test vectors
@@ -202,14 +278,19 @@ with open(os.path.join(output_dir, "weights_fixed.json"), "w") as f:
     json.dump(fixed_weights, f)
 
 test_vectors = {
-    "FRAC_BITS":     FRAC_BITS,
-    "WEIGHT_BITS":   WEIGHT_BITS,
-    "ACC_BITS":      ACC_BITS,
-    "INPUT_DIM":     INPUT_DIM,
-    "HIDDEN_DIM":    HIDDEN_DIM,
-    "OUTPUT_DIM":    OUTPUT_DIM,
-    "matches_float": int(matches_float),
-    "vectors":       [],
+    "FRAC_BITS":              FRAC_BITS,
+    "WEIGHT_BITS":            WEIGHT_BITS,
+    "ACC_BITS":               ACC_BITS,
+    "INPUT_DIM":              INPUT_DIM,
+    "HIDDEN_DIM":             HIDDEN_DIM,
+    "OUTPUT_DIM":             OUTPUT_DIM,
+    "matches_float":          int(matches_float),
+    "full_num_tests":         N_full,
+    "full_float_accuracy":    float(acc_float_full),
+    "full_fixed_accuracy":    float(acc_fp_full),
+    "full_matches_float":     int(matches_float_full),
+    "full_match_rate":        float(match_rate_full),
+    "vectors":                [],
 }
 for i in range(len(X_test)):
     logits = all_logits[i]
