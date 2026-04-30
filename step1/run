@@ -1,9 +1,17 @@
 #!/bin/bash
+# step1: train the MLP at the given resolution + hidden width.
+#
+# Usage (positional, called from top-level run):
+#   ./step1/run [RESOLUTION] [HIDDEN]
+#
+# Defaults: RESOLUTION=28, HIDDEN=128.
 set -e
 STEP_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="$STEP_DIR/output"
+RESOLUTION="${1:-28}"
+HIDDEN="${2:-128}"
 mkdir -p "$OUT"
-echo "=== step1: PyTorch Train (float) ==="
-python3 "$STEP_DIR/train.py" "$OUT"
+echo "=== step1: PyTorch Train (float, ${RESOLUTION}x${RESOLUTION}, hidden=${HIDDEN}) ==="
+python3 "$STEP_DIR/train.py" "$OUT" "$RESOLUTION" "$HIDDEN"
 python3 "$STEP_DIR/summarize.py" "$OUT"
 echo "=== step1 DONE ==="

@@ -8,10 +8,20 @@ import os
 import sys
 
 # --------------------------------------------------------------------------
-# Output directory (passed as argument, defaults to cwd)
+# CLI: argv[1] = output_dir, argv[2] = resolution, argv[3] = hidden
 # --------------------------------------------------------------------------
 
 output_dir = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
+RESOLUTION = int(sys.argv[2]) if len(sys.argv) > 2 else 28
+HIDDEN_DIM = int(sys.argv[3]) if len(sys.argv) > 3 else 128
+INPUT_DIM  = RESOLUTION * RESOLUTION
+OUTPUT_DIM = 10
+
+if not (1 <= RESOLUTION <= 28):
+    sys.exit(f"ERROR: resolution must be in [1,28] (got {RESOLUTION})")
+if HIDDEN_DIM < 1:
+    sys.exit(f"ERROR: hidden must be >= 1 (got {HIDDEN_DIM})")
+
 os.makedirs(output_dir, exist_ok=True)
 
 # --------------------------------------------------------------------------
@@ -39,6 +49,10 @@ NUM_EXPORT_VECTORS = 30
 # as iris's StandardScaler — zero-mean, ~unit-variance — and is preferred
 # over plain /255 here because it spreads pixel values across more of the
 # fixed-point range (much better resolution under 8-bit Q3.4 quantization).
+#
+# Resolution: native MNIST is 28x28 (= 784 pixels). For smaller variants
+# (e.g., 14x14 = 196 pixels), bilinear-resize the tensor *before* normalizing
+# so downstream steps just see a smaller flat input vector.
 
 MNIST_MEAN = 0.1307
 MNIST_STD  = 0.3081
@@ -46,11 +60,16 @@ MNIST_STD  = 0.3081
 # Repo-local dataset cache; reused across runs once downloaded.
 data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
-transform = transforms.Compose([
-    transforms.ToTensor(),                          # (1, 28, 28) in [0, 1]
-    transforms.Normalize((MNIST_MEAN,), (MNIST_STD,)),
-    transforms.Lambda(lambda x: x.view(-1)),        # flatten to (784,)
-])
+transform_list = [transforms.ToTensor()]                         # (1, 28, 28) in [0, 1]
+if RESOLUTION != 28:
+    transform_list.append(transforms.Resize(
+        (RESOLUTION, RESOLUTION),
+        interpolation=transforms.InterpolationMode.BILINEAR,
+        antialias=True,
+    ))
+transform_list.append(transforms.Normalize((MNIST_MEAN,), (MNIST_STD,)))
+transform_list.append(transforms.Lambda(lambda x: x.view(-1)))   # flatten to (INPUT_DIM,)
+transform = transforms.Compose(transform_list)
 
 train_set = datasets.MNIST(data_root, train=True,  download=True, transform=transform)
 test_set  = datasets.MNIST(data_root, train=False, download=True, transform=transform)
@@ -59,12 +78,12 @@ train_loader = DataLoader(train_set, batch_size=128, shuffle=True)
 test_loader  = DataLoader(test_set,  batch_size=1000, shuffle=False)
 
 # --------------------------------------------------------------------------
-# Define model: 784 -> 128 (ReLU) -> 10
+# Define model: INPUT_DIM -> HIDDEN_DIM (ReLU) -> OUTPUT_DIM
 # --------------------------------------------------------------------------
 #
-# Matches the canonical TF/Keras MNIST tutorial (which reaches ~97%).
-# Drop-in shape for MLPHardwiredXcelRTL with INPUT_DIM=784, HIDDEN_DIM=128,
-# OUTPUT_DIM=10.
+# Default 784 -> 128 -> 10 matches the canonical TF/Keras MNIST tutorial
+# baseline (~97% test acc). Drop-in shape for the parameterized hardwired
+# accelerator (INPUT_DIM/HIDDEN_DIM/OUTPUT_DIM SystemVerilog parameters).
 #
 # Why no softmax?
 # ---------------
@@ -74,10 +93,13 @@ test_loader  = DataLoader(test_set,  batch_size=1000, shuffle=False)
 # applies log_softmax internally, so we feed it raw logits during training.
 # In hardware: emit raw logits and do argmax with comparators.
 
+print(f"Building MLP {INPUT_DIM} -> {HIDDEN_DIM} -> {OUTPUT_DIM} "
+      f"(resolution {RESOLUTION}x{RESOLUTION}, hidden={HIDDEN_DIM})")
+
 model = nn.Sequential(
-    nn.Linear(784, 128),
+    nn.Linear(INPUT_DIM, HIDDEN_DIM),
     nn.ReLU(),
-    nn.Linear(128, 10),
+    nn.Linear(HIDDEN_DIM, OUTPUT_DIM),
 )
 
 criterion = nn.CrossEntropyLoss()
@@ -87,7 +109,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # Train
 # --------------------------------------------------------------------------
 
-num_epochs = 6  # matches TF tutorial; ~97% test acc
+num_epochs = 6  # matches TF tutorial; ~97% test acc at default size
 
 for epoch in range(num_epochs):
     model.train()
@@ -139,7 +161,7 @@ print(f"\nFinal test accuracy (full 10000): {acc_full:.4f}")
 # Take the first NUM_EXPORT_VECTORS test images in dataset order. Save the
 # already-normalized inputs so step2/step3 can replay them exactly.
 
-X_export = torch.stack([test_set[i][0] for i in range(NUM_EXPORT_VECTORS)])  # (N, 784)
+X_export = torch.stack([test_set[i][0] for i in range(NUM_EXPORT_VECTORS)])
 y_export = torch.tensor([test_set[i][1] for i in range(NUM_EXPORT_VECTORS)], dtype=torch.long)
 
 with torch.no_grad():
@@ -164,12 +186,16 @@ for i in range(NUM_EXPORT_VECTORS):
 # --------------------------------------------------------------------------
 
 weights = {
-    "W1": model[0].weight.detach().numpy().tolist(),  # (128, 784)
-    "b1": model[0].bias.detach().numpy().tolist(),     # (128,)
-    "W2": model[2].weight.detach().numpy().tolist(),   # (10, 128)
-    "b2": model[2].bias.detach().numpy().tolist(),     # (10,)
-    "norm_mean": [MNIST_MEAN],                          # global scalar mean
-    "norm_std":  [MNIST_STD],                           # global scalar std
+    "RESOLUTION": RESOLUTION,
+    "INPUT_DIM":  INPUT_DIM,
+    "HIDDEN_DIM": HIDDEN_DIM,
+    "OUTPUT_DIM": OUTPUT_DIM,
+    "W1": model[0].weight.detach().numpy().tolist(),  # (HIDDEN_DIM, INPUT_DIM)
+    "b1": model[0].bias.detach().numpy().tolist(),     # (HIDDEN_DIM,)
+    "W2": model[2].weight.detach().numpy().tolist(),   # (OUTPUT_DIM, HIDDEN_DIM)
+    "b2": model[2].bias.detach().numpy().tolist(),     # (OUTPUT_DIM,)
+    "norm_mean": [MNIST_MEAN],
+    "norm_std":  [MNIST_STD],
 }
 
 with open(os.path.join(output_dir, "weights.json"), "w") as f:
@@ -177,7 +203,11 @@ with open(os.path.join(output_dir, "weights.json"), "w") as f:
 
 # Save test data for golden reference (only the exported subset)
 test_data = {
-    "X_test_raw": X_export.numpy().tolist(),     # already normalized, flat 784
+    "RESOLUTION": RESOLUTION,
+    "INPUT_DIM":  INPUT_DIM,
+    "HIDDEN_DIM": HIDDEN_DIM,
+    "OUTPUT_DIM": OUTPUT_DIM,
+    "X_test_raw": X_export.numpy().tolist(),     # already normalized, flat INPUT_DIM
     "y_test": y_export.numpy().tolist(),
     "pytorch_preds": preds_export.numpy().tolist(),
     "pytorch_num_correct": num_correct_export,
@@ -195,7 +225,7 @@ print(f"Test data saved to {os.path.join(output_dir, 'test_data.json')}")
 
 # Print weight shapes for reference
 print("\nWeight shapes:")
-print(f"  W1: {model[0].weight.shape}  (128x784)")
-print(f"  b1: {model[0].bias.shape}    (128)")
-print(f"  W2: {model[2].weight.shape}  (10x128)")
-print(f"  b2: {model[2].bias.shape}    (10)")
+print(f"  W1: {tuple(model[0].weight.shape)}  ({HIDDEN_DIM}x{INPUT_DIM})")
+print(f"  b1: {tuple(model[0].bias.shape)}    ({HIDDEN_DIM})")
+print(f"  W2: {tuple(model[2].weight.shape)}  ({OUTPUT_DIM}x{HIDDEN_DIM})")
+print(f"  b2: {tuple(model[2].bias.shape)}    ({OUTPUT_DIM})")

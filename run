@@ -1,9 +1,66 @@
 #!/usr/bin/env bash
+# MNIST data prep. Variants over (precision, resolution, hidden).
+#
 # Usage:
-#   ./run          -> 8-bit (Q3.4) fixed-point at step3 (default)
-#   ./run 16       -> 16-bit (Q7.8)
-#   PRECISION=16 ./run
+#   ./run                                              -> defaults: 8-bit, 28x28, h=128
+#   ./run --precision=8 --resolution=14 --hidden=64    -> V4
+#   PRECISION=8 RESOLUTION=14 HIDDEN=64 ./run
+#
+# Defaults: PRECISION=8, RESOLUTION=28, HIDDEN=128.
+#
+# Variant naming used for the results directory:
+#   results/<INPUT_DIM>x<HIDDEN>_<precision>bits/
+# e.g. results/784x128_8bits/, results/196x64_8bits/.
 
-./step1/run
-./step2/run
-./step3/run "${1:-${PRECISION:-8}}"
+set -euo pipefail
+
+PRECISION="${PRECISION:-8}"
+RESOLUTION="${RESOLUTION:-28}"
+HIDDEN="${HIDDEN:-128}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --precision=*)  PRECISION="${arg#*=}"  ;;
+    --resolution=*) RESOLUTION="${arg#*=}" ;;
+    --hidden=*)     HIDDEN="${arg#*=}"     ;;
+    -h|--help)
+      sed -n '2,15p' "$0" | sed 's/^# \?//'
+      exit 0
+      ;;
+    *) echo "unknown arg: $arg" >&2; exit 2 ;;
+  esac
+done
+
+case "$PRECISION" in 4|8|16) ;;
+  *) echo "ERROR: --precision must be 4, 8, or 16 (got $PRECISION)" >&2; exit 2 ;;
+esac
+
+[[ "$RESOLUTION" =~ ^[0-9]+$ ]] && (( RESOLUTION >= 1 && RESOLUTION <= 28 )) \
+  || { echo "ERROR: --resolution must be an integer in [1,28] (got $RESOLUTION)" >&2; exit 2; }
+
+[[ "$HIDDEN" =~ ^[0-9]+$ ]] && (( HIDDEN >= 1 )) \
+  || { echo "ERROR: --hidden must be a positive integer (got $HIDDEN)" >&2; exit 2; }
+
+INPUT_DIM=$(( RESOLUTION * RESOLUTION ))
+
+echo "==== Run params: precision=${PRECISION}-bit  resolution=${RESOLUTION}x${RESOLUTION}  hidden=${HIDDEN}  input_dim=${INPUT_DIM} ===="
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+"$HERE/step1/run" "$RESOLUTION" "$HIDDEN"
+"$HERE/step2/run"
+"$HERE/step3/run" "$PRECISION"
+
+# Stash this variant's outputs into a stable, descriptively-named results dir.
+DEST="$HERE/results/${INPUT_DIM}x${HIDDEN}_${PRECISION}bits"
+mkdir -p "$DEST"
+cp "$HERE/step3/output/weights_fixed.json" "$DEST/weights_fixed.json"
+cp "$HERE/step3/output/test_vectors.json"  "$DEST/test_vectors.json"
+[[ -f "$HERE/step3/output/summary.txt" ]] && cp "$HERE/step3/output/summary.txt" "$DEST/summary.txt"
+
+echo ""
+echo "==== Generating C headers in ${DEST} ===="
+python3 "$HERE/results/gen_headers_for_app.py" --dir "$DEST" --out-dir "$DEST"
+
+echo ""
+echo "==== DONE: ${DEST} ===="

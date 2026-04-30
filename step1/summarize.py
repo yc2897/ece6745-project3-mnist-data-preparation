@@ -20,11 +20,17 @@ def emit(s=""):
     lines.append(s)
     print(s)
 
+in_dim  = w.get("INPUT_DIM",  len(w['W1'][0]))
+hid_dim = w.get("HIDDEN_DIM", len(w['W1']))
+out_dim = w.get("OUTPUT_DIM", len(w['W2']))
+res     = w.get("RESOLUTION", 28)
+
 emit("=" * 60)
 emit(" step1: PyTorch Train (float)")
 emit("=" * 60)
 emit(f" {'timestamp':<{W}} = {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-emit(f" {'model':<{W}} = 784 -> 128 (ReLU) -> 10")
+emit(f" {'model':<{W}} = {in_dim} -> {hid_dim} (ReLU) -> {out_dim}")
+emit(f" {'resolution':<{W}} = {res}x{res}")
 emit(f" {'framework':<{W}} = PyTorch (float32)")
 emit(f" {'seed':<{W}} = 42")
 emit(f" {'W1 shape':<{W}} = {len(w['W1'])}x{len(w['W1'][0])}")

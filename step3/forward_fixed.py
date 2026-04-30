@@ -17,8 +17,8 @@ output_dir = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
 precision  = int(sys.argv[3]) if len(sys.argv) > 3 else 8
 os.makedirs(output_dir, exist_ok=True)
 
-if precision not in (8, 16):
-    sys.exit(f"ERROR: precision must be 8 or 16, got {precision}")
+if precision not in (4, 8, 16):
+    sys.exit(f"ERROR: precision must be 4, 8, or 16, got {precision}")
 
 with open(os.path.join(input_dir, "weights.json")) as f:
     weights = json.load(f)
@@ -42,7 +42,12 @@ y_test   = np.array(test_data["y_test"], dtype=np.int64)        # (N,)
 # Signed fixed-point with FRAC_BITS fractional bits.
 # A float value v is represented as: int(round(v * 2^FRAC_BITS))
 #
-# 8-bit  -> Q3.4  (1 sign + 3 integer + 4 fractional)
+#  4-bit -> Q2.1  (1 sign + 2 integer + 1 fractional)
+#           range [-4.0, +3.5]
+#           stored as int8 (numpy has no int4, but values fit in [-8,+7])
+#           accumulator int32
+#
+#  8-bit -> Q3.4  (1 sign + 3 integer + 4 fractional)
 #           range [-8.0, +7.9375]
 #           stored as int8, accumulator int32
 #
@@ -50,14 +55,28 @@ y_test   = np.array(test_data["y_test"], dtype=np.int64)        # (N,)
 #           range [-128.0, +127.996]
 #           stored as int16, accumulator int32
 #
+# Why not Q1.2 for 4-bit?
+# -----------------------
+# The "natural" extension of Q3.4 / Q7.8 would be Q1.2 (frac = bits/2),
+# which has range ±1.75. But MNIST normalized pixels routinely hit ~3.0,
+# which would saturate every bright pixel to 1.75 and destroy accuracy.
+# Q2.1 trades half the resolution (0.5 vs 0.25) for a 2x range — usable.
+#
 # After a multiply of two Q-values, the result has 2*FRAC_BITS fractional
 # bits. After accumulation, we right-shift by FRAC_BITS to realign.
 #
 # Accumulator headroom (MNIST 784 -> 128 -> 10):
-#   layer1: <= 784 products of two int8/int16 values -> safely fits int32
-#   layer2: <= 128 products of two int8/int16 values -> safely fits int32
+#   layer1: <= 784 products of two int4/int8/int16 values -> fits int32
+#   layer2: <= 128 products of two int4/int8/int16 values -> fits int32
 
-if precision == 8:
+if precision == 4:
+    FRAC_BITS   = 1
+    WEIGHT_BITS = 4
+    ACC_BITS    = 32
+    STORE_DTYPE = np.int8                # numpy has no int4; use int8
+    INT_MIN, INT_MAX = -8, 7             # 4-bit signed range
+    Q_LABEL     = "Q2.1"
+elif precision == 8:
     FRAC_BITS   = 4
     WEIGHT_BITS = 8
     ACC_BITS    = 32
@@ -201,17 +220,25 @@ else:
 print(f"\nFull-10k fixed-point evaluation ({Q_LABEL})")
 print("=" * 50)
 
-# Reload the full normalized test set the same way step1 did.
+# Reload the full normalized test set the same way step1 did. Crucially, we
+# must use the SAME resolution step1 trained at — for downsampled variants
+# (e.g., 14x14 = 196), we resize before normalizing.
 data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 MNIST_MEAN = 0.1307
 MNIST_STD  = 0.3081
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((MNIST_MEAN,), (MNIST_STD,)),
-    transforms.Lambda(lambda x: x.view(-1)),
-])
+RESOLUTION = weights.get("RESOLUTION", 28)
+transform_list = [transforms.ToTensor()]
+if RESOLUTION != 28:
+    transform_list.append(transforms.Resize(
+        (RESOLUTION, RESOLUTION),
+        interpolation=transforms.InterpolationMode.BILINEAR,
+        antialias=True,
+    ))
+transform_list.append(transforms.Normalize((MNIST_MEAN,), (MNIST_STD,)))
+transform_list.append(transforms.Lambda(lambda x: x.view(-1)))
+transform = transforms.Compose(transform_list)
 test_set_full = datasets.MNIST(data_root, train=False, download=True, transform=transform)
-X_full_f = torch.stack([test_set_full[i][0] for i in range(len(test_set_full))]).numpy()  # (10000, 784)
+X_full_f = torch.stack([test_set_full[i][0] for i in range(len(test_set_full))]).numpy()  # (10000, INPUT_DIM)
 y_full   = np.array([test_set_full[i][1] for i in range(len(test_set_full))], dtype=np.int64)
 N_full   = len(y_full)
 
@@ -266,6 +293,7 @@ fixed_weights = {
     "FRAC_BITS":   FRAC_BITS,
     "WEIGHT_BITS": WEIGHT_BITS,
     "ACC_BITS":    ACC_BITS,
+    "RESOLUTION":  RESOLUTION,
     "INPUT_DIM":   INPUT_DIM,
     "HIDDEN_DIM":  HIDDEN_DIM,
     "OUTPUT_DIM":  OUTPUT_DIM,
@@ -281,6 +309,7 @@ test_vectors = {
     "FRAC_BITS":              FRAC_BITS,
     "WEIGHT_BITS":            WEIGHT_BITS,
     "ACC_BITS":               ACC_BITS,
+    "RESOLUTION":             RESOLUTION,
     "INPUT_DIM":              INPUT_DIM,
     "HIDDEN_DIM":             HIDDEN_DIM,
     "OUTPUT_DIM":             OUTPUT_DIM,

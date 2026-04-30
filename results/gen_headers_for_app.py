@@ -29,11 +29,11 @@ def gen_weights(json_path, out_path, bits):
         "",
         "#include <stdint.h>",
         "",
-        f"// dim macros live in proj3-baseline.h "
-        f"(FRAC_BITS={data['FRAC_BITS']}, "
-        f"INPUT_DIM={data.get('INPUT_DIM','?')}, "
-        f"HIDDEN_DIM={data.get('HIDDEN_DIM','?')}, "
-        f"OUTPUT_DIM={data.get('OUTPUT_DIM','?')})",
+        f"#define PROJ3_FRAC_BITS  {data['FRAC_BITS']}",
+        f"#define PROJ3_RESOLUTION {data.get('RESOLUTION', '?')}",
+        f"#define PROJ3_INPUT_DIM  {data.get('INPUT_DIM',  '?')}",
+        f"#define PROJ3_HIDDEN_DIM {data.get('HIDDEN_DIM', '?')}",
+        f"#define PROJ3_OUTPUT_DIM {data.get('OUTPUT_DIM', '?')}",
         "",
         fmt_array("proj3_W1", data["W1"]),
         fmt_array("proj3_b1", data["b1"]),
