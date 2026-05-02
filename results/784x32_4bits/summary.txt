@@ -1,0 +1,21 @@
+============================================================
+ step3: NumPy Fixed-Point Forward Pass
+============================================================
+ timestamp                = 2026-04-30 09:23:55
+ format                   = Q2.1 signed
+ data_width               = 4-bit
+ accum_width              = 32-bit
+ frac_bits                = 1
+ network_shape            = 784 -> 32 -> 10
+ reads from               = step1/output/
+ num_test_vectors         = 30
+ fixed_point_accuracy     = 5/30 (16.7%)
+ matches_float            = 4/30 (13.3%)
+ full_test_set            = 10000
+ full_float_accuracy      = 96.31%
+ full_fixed_accuracy      = 16.33%
+ full_matches_float       = 1621/10000 (16.21%)
+ outputs                  = weights_fixed.json, test_vectors.json
+
+ STATUS = FAIL (fixed-point == float on every exported sample)
+
