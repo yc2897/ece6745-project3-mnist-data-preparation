@@ -60,7 +60,11 @@ cp "$HERE/step3/output/test_vectors.json"  "$DEST/test_vectors.json"
 
 echo ""
 echo "==== Generating C headers in ${DEST} ===="
-python3 "$HERE/results/gen_headers_for_app.py" --dir "$DEST" --out-dir "$DEST"
+python3 "$HERE/results/gen_headers_for_app.py" \
+  --dir         "$DEST" \
+  --out-dir     "$DEST" \
+  --resolution  "$RESOLUTION" \
+  --hidden      "$HIDDEN"
 
 echo ""
 echo "==== DONE: ${DEST} ===="
